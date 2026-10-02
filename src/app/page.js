@@ -20,9 +20,7 @@ export default function Home() {
   const [activeFilters, setActiveFilters] = useState([]);
   const [newKeyword, setNewKeyword] = useState("");
 
-  // 1. Otomatis jalan sejak awal
   const [isListening, setIsListening] = useState(true);
-  // 2. Status izin suara browser
   const [audioUnlocked, setAudioUnlocked] = useState(false);
   const [lastAnnouncement, setLastAnnouncement] = useState(
     "Menunggu Izin Suara (Klik Sembarang Tempat)",
@@ -30,11 +28,47 @@ export default function Home() {
 
   const processedKeys = useRef(new Set());
 
-  // 3. Efek untuk "Membuka Kunci" Suara dengan 1 Klik Sembarang
+  // ==========================================
+  // FUNGSI PEMBERSIH TEKS (PARSING TEXT)
+  // ==========================================
+  const cleanNotificationText = (text) => {
+    if (!text) return "";
+    let cleaned = text;
+
+    // 1. Hapus sapaan awal khas BRImo ("Sobat BRI!")
+    cleaned = cleaned.replace(/^Sobat BRI!?\s*/i, "");
+
+    // 2. Hapus nomor rekening & waktu di tengah ("ke rekening 364601020073539 pada 02/10/2026 15:42:57")
+    cleaned = cleaned.replace(
+      /\s*ke rekening \d+\s*pada \d{1,2}[/-]\d{1,2}[/-]\d{4} \d{2}:\d{2}:\d{2}/i,
+      "",
+    );
+
+    // 3. Hapus kode KET / Keterangan transfer panjang di belakang ("KET.:BFST364601020...")
+    cleaned = cleaned.replace(/\s*KET\.:.*$/i, "");
+
+    // 4. Hapus tanggal & waktu di depan (Format QRIS BRImo: "02/10/2026 14:39:30 - ")
+    cleaned = cleaned.replace(
+      /^\d{1,2}[/-]\d{1,2}[/-]\d{4}\s\d{2}:\d{2}:\d{2}\s*-\s*/,
+      "",
+    );
+
+    // 5. Hapus promosi/call center di belakang (QRIS BRImo / e-Wallet)
+    cleaned = cleaned.replace(
+      /\.?\s*(Info lebih lanjut|Hubungi Call Center|Call Center|Abaikan jika|Pastikan).*$/i,
+      "",
+    );
+
+    // 6. Hapus teks basa-basi e-wallet (DANA / GoPay)
+    cleaned = cleaned.replace(/\.?\s*Lihat detail(nya)? di sini\.?/i, "");
+
+    return cleaned.trim();
+  };
+
+  // Efek untuk "Membuka Kunci" Suara dengan 1 Klik Sembarang
   useEffect(() => {
     const unlockAudio = () => {
       if (!audioUnlocked && "speechSynthesis" in window) {
-        // Pancing browser dengan suara kosong agar izin audio terbuka
         const utterance = new SpeechSynthesisUtterance("");
         utterance.volume = 0;
         window.speechSynthesis.speak(utterance);
@@ -42,7 +76,6 @@ export default function Home() {
         setAudioUnlocked(true);
         setLastAnnouncement("Sistem & Suara Aktif 🟢");
 
-        // Hapus pendengar klik agar tidak membebani performa setelah aktif
         document.removeEventListener("click", unlockAudio);
         document.removeEventListener("touchstart", unlockAudio);
       }
@@ -105,11 +138,24 @@ export default function Home() {
 
       if (!processedKeys.current.has(key)) {
         processedKeys.current.add(key);
-        setPayments((prev) => [data, ...prev]);
-        const textToSpeak = `Ada pembayaran masuk, dari ${data.app_source || "Aplikasi"}. ${data.content || ""}`;
 
+        // --- PROSES PARSING ---
+        // Jika app_source-nya "Bank / Digital Bank", ambil title-nya saja (misal: "BRImo", "Livin", dll)
+        const displayApp =
+          data.app_source === "Bank / Digital Bank" && data.title
+            ? data.title
+            : data.app_source || "Aplikasi";
+
+        const cleanedContent = cleanNotificationText(data.content);
+
+        // Simpan data yang sudah dibersihkan ke dalam state riwayat web
+        const finalData = { ...data, displayApp, cleanedContent };
+        setPayments((prev) => [finalData, ...prev]);
+
+        // Teks yang akan diucapkan oleh suara Google
+        const textToSpeak = `Ada pembayaran masuk di ${displayApp}. ${cleanedContent}`;
         setLastAnnouncement(textToSpeak);
-        // Suara hanya dibunyikan jika browser sudah diizinkan (diklik)
+
         if (audioUnlocked) {
           speakText(textToSpeak);
         }
@@ -230,10 +276,10 @@ export default function Home() {
                   className="bg-slate-800/50 p-4 rounded-xl flex flex-col md:flex-row justify-between md:items-center border border-white/5 hover:bg-slate-800 transition-colors gap-2"
                 >
                   <span className="text-emerald-400 font-bold text-lg">
-                    {p.app_source}
+                    {p.displayApp}
                   </span>
                   <span className="text-slate-300 md:text-right flex-1">
-                    {p.content}
+                    {p.cleanedContent}
                   </span>
                 </div>
               ))
