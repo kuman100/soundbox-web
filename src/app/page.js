@@ -15,6 +15,76 @@ import {
 } from "firebase/database";
 import { db } from "../firebase";
 
+// ==========================================
+// FILTER NOTIFIKASI (2 LAPIS: BLACKLIST + WHITELIST)
+// ==========================================
+
+// Kata/frasa yang menandakan promo/spam -> langsung diblokir
+const PROMO_PATTERNS = [
+  "pesan masuk",
+  "shopee video",
+  "promo",
+  "hemat",
+  "diskon",
+  "cashback",
+  "voucher",
+  "gratis",
+  "flash sale",
+  "klaim",
+  "dapatkan",
+  "bonus",
+  "jangan lewatkan",
+  "pake dana",
+  "pakai dana",
+  "pake gopay",
+  "pakai gopay",
+  "pakai shopeepay",
+  "pake shopeepay",
+  "belanja",
+  "tawaran",
+  "undian",
+  "misi",
+  "poin",
+  "beli ",
+  "ayo ",
+];
+
+// Judul notifikasi yang pasti bukan pembayaran
+const BLOCKED_TITLES = ["chat", "shopee video", "promo"];
+
+// Notifikasi HARUS mengandung salah satu ini agar dianggap pembayaran masuk
+const PAYMENT_HINTS = [
+  "menerima",
+  "diterima",
+  "terima",
+  "transfer masuk",
+  "uang masuk",
+  "saldo masuk",
+  "dana masuk",
+  "pembayaran berhasil",
+  "pembayaran dari",
+  "pembayaran qris",
+  "transaksi qris",
+  "berhasil",
+];
+
+const isRealPayment = (data, customBlocked = []) => {
+  const title = (data.title || "").toLowerCase();
+  const content = (data.content || "").toLowerCase();
+  const all = `${title} ${content}`;
+
+  // Lapis 1: blacklist
+  if (BLOCKED_TITLES.some((k) => title.includes(k))) return false;
+  if (PROMO_PATTERNS.some((k) => all.includes(k))) return false;
+  if (customBlocked.some((k) => k && all.includes(String(k).toLowerCase())))
+    return false;
+
+  // Lapis 2: whitelist - wajib ada nominal DAN kata penanda pembayaran masuk
+  const hasAmount = /rp\s?[\d.,]+/i.test(all);
+  const hasPaymentHint = PAYMENT_HINTS.some((k) => all.includes(k));
+  return hasAmount && hasPaymentHint;
+};
+
 export default function Home() {
   const [payments, setPayments] = useState([]);
   const [activeFilters, setActiveFilters] = useState([]);
@@ -27,6 +97,8 @@ export default function Home() {
   );
 
   const processedKeys = useRef(new Set());
+  // Ref agar listener transaksi selalu pakai filter terbaru tanpa re-subscribe
+  const customFiltersRef = useRef([]);
 
   // ==========================================
   // FUNGSI PEMBERSIH TEKS (PARSING TEXT)
@@ -115,6 +187,10 @@ export default function Home() {
         const data = snapshot.val();
         const filters = Array.isArray(data) ? data : Object.values(data);
         setActiveFilters(filters);
+        customFiltersRef.current = filters;
+      } else {
+        setActiveFilters([]);
+        customFiltersRef.current = [];
       }
     });
     return () => unsubscribe();
@@ -142,24 +218,15 @@ export default function Home() {
         // ==========================================
         // FILTER LAPIS KEDUA (WEB ONLY)
         // ==========================================
-        const lowerTitle = (data.title || "").toLowerCase();
-        const lowerContent = (data.content || "").toLowerCase();
-
-        // Daftar kata yang PASTI BUKAN pembayaran (blokir otomatis)
-        const isSpam =
-          lowerTitle.includes("shopee video") ||
-          lowerContent.includes("pesan masuk") ||
-          lowerTitle.includes("promo") ||
-          lowerTitle.includes("chat");
-
-        if (isSpam) {
+        if (!isRealPayment(data, customFiltersRef.current)) {
+          console.log("[BLOCKED]", data.title, "|", data.content);
           // Hapus dari database agar tidak menumpuk dan JANGAN bunyikan suara
           remove(ref(db, `incoming_payments/${key}`));
-          return; // Hentikan eksekusi kode di bawahnya
+          return;
         }
         // ==========================================
 
-        // --- PROSES PARSING (Jika lolos filter spam) ---
+        // --- PROSES PARSING (Jika lolos filter) ---
         const displayApp =
           data.app_source === "Bank / Digital Bank" && data.title
             ? data.title
