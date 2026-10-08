@@ -139,8 +139,27 @@ export default function Home() {
       if (!processedKeys.current.has(key)) {
         processedKeys.current.add(key);
 
-        // --- PROSES PARSING ---
-        // Jika app_source-nya "Bank / Digital Bank", ambil title-nya saja (misal: "BRImo", "Livin", dll)
+        // ==========================================
+        // FILTER LAPIS KEDUA (WEB ONLY)
+        // ==========================================
+        const lowerTitle = (data.title || "").toLowerCase();
+        const lowerContent = (data.content || "").toLowerCase();
+
+        // Daftar kata yang PASTI BUKAN pembayaran (blokir otomatis)
+        const isSpam =
+          lowerTitle.includes("shopee video") ||
+          lowerContent.includes("pesan masuk") ||
+          lowerTitle.includes("promo") ||
+          lowerTitle.includes("chat");
+
+        if (isSpam) {
+          // Hapus dari database agar tidak menumpuk dan JANGAN bunyikan suara
+          remove(ref(db, `incoming_payments/${key}`));
+          return; // Hentikan eksekusi kode di bawahnya
+        }
+        // ==========================================
+
+        // --- PROSES PARSING (Jika lolos filter spam) ---
         const displayApp =
           data.app_source === "Bank / Digital Bank" && data.title
             ? data.title
@@ -148,11 +167,9 @@ export default function Home() {
 
         const cleanedContent = cleanNotificationText(data.content);
 
-        // Simpan data yang sudah dibersihkan ke dalam state riwayat web
         const finalData = { ...data, displayApp, cleanedContent };
         setPayments((prev) => [finalData, ...prev]);
 
-        // Teks yang akan diucapkan oleh suara Google
         const textToSpeak = `Ada pembayaran masuk di ${displayApp}. ${cleanedContent}`;
         setLastAnnouncement(textToSpeak);
 
